@@ -1,0 +1,406 @@
+// AISAF — Prisma schema (Phase 1 scaffold)
+// Entities per arc.md §5; indexes per §5 + search notes in §6.5
+// Confirm with product owner before migrating.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  ADMIN
+  STAFF
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  STRIPE
+  JAZZCASH
+  EASYPAISA
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+enum CouponType {
+  PERCENT
+  FLAT
+}
+
+enum VariantAttribute {
+  SHADE
+  SIZE
+}
+
+// ─── Auth / Users ─────────────────────────────────────────────────────────────
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String?
+  name         String?
+  role         Role      @default(CUSTOMER)
+  emailVerified DateTime?
+  image        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  addresses Address[]
+  cart      Cart?
+  wishlist  WishlistItem[]
+  orders    Order[]
+  reviews   Review[]
+  accounts  Account[] // NextAuth OAuth accounts
+  sessions  Session[] // NextAuth sessions (if DB strategy used later)
+
+  @@index([role])
+}
+
+/// NextAuth Account model (OAuth providers)
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+/// NextAuth Session model (kept for compatibility; JWT strategy is primary)
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Address {
+  id         String   @id @default(cuid())
+  userId     String
+  label      String? // e.g. "Home", "Work"
+  fullName   String
+  phone      String
+  line1      String
+  line2      String?
+  city       String
+  state      String?
+  postalCode String
+  country    String   @default("PK")
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─── Catalog ──────────────────────────────────────────────────────────────────
+
+model Category {
+  id       String  @id @default(cuid())
+  name     String
+  slug     String  @unique
+  parentId String?
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@index([parentId])
+}
+
+model Tag {
+  id       String       @id @default(cuid())
+  name     String       @unique
+  slug     String       @unique
+  products ProductTag[]
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  description   String   @db.Text
+  ingredients   String?  @db.Text
+  price         Decimal  @db.Decimal(10, 2)
+  compareAtPrice Decimal? @db.Decimal(10, 2)
+  brand         String?
+  categoryId    String
+  images        String[] // Cloudinary URLs
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Full-text search support (populated via migration / trigger — see §6.5)
+  searchVector Unsupported("tsvector")?
+
+  category          Category           @relation(fields: [categoryId], references: [id])
+  variants          ProductVariant[]
+  tags              ProductTag[]
+  wishlistItems     WishlistItem[]
+  reviews           Review[]
+  orderItems        OrderItem[]
+  relatedFrom       ProductRelation[]  @relation("RelationFrom")
+  relatedTo         ProductRelation[]  @relation("RelationTo")
+  coPurchaseAsA     CoPurchasePair[]   @relation("CoPurchaseA")
+  coPurchaseAsB     CoPurchasePair[]   @relation("CoPurchaseB")
+
+  @@index([categoryId])
+  @@index([brand])
+  @@index([isActive])
+  @@index([price])
+}
+
+model ProductTag {
+  productId String
+  tagId     String
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([productId, tagId])
+  @@index([tagId])
+}
+
+model ProductVariant {
+  id            String           @id @default(cuid())
+  productId     String
+  attribute     VariantAttribute
+  value         String // e.g. "Rose Nude", "50ml"
+  sku           String           @unique
+  stock         Int              @default(0)
+  priceOverride Decimal?         @db.Decimal(10, 2)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
+  @@index([productId])
+  @@index([stock])
+}
+
+/// Precomputed "You may also like" relations (arc.md §6.1)
+model ProductRelation {
+  id              String   @id @default(cuid())
+  productId       String
+  relatedId       String
+  score           Float
+  computedAt      DateTime @default(now())
+
+  product Product @relation("RelationFrom", fields: [productId], references: [id], onDelete: Cascade)
+  related Product @relation("RelationTo", fields: [relatedId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, relatedId])
+  @@index([productId, score(sort: Desc)])
+}
+
+/// Market-basket co-purchase counts (arc.md §6.2)
+model CoPurchasePair {
+  id        String @id @default(cuid())
+  productAId String
+  productBId String
+  count     Int    @default(0)
+
+  productA Product @relation("CoPurchaseA", fields: [productAId], references: [id], onDelete: Cascade)
+  productB Product @relation("CoPurchaseB", fields: [productBId], references: [id], onDelete: Cascade)
+
+  @@unique([productAId, productBId])
+  @@index([productAId, count(sort: Desc)])
+}
+
+// ─── Cart & Wishlist ──────────────────────────────────────────────────────────
+
+model Cart {
+  id             String   @id @default(cuid())
+  userId         String?  @unique
+  guestSessionId String?  @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user  User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CartItem[]
+
+  @@index([guestSessionId])
+}
+
+model CartItem {
+  id        String   @id @default(cuid())
+  cartId    String
+  variantId String
+  qty       Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cart    Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, variantId])
+  @@index([variantId])
+}
+
+model WishlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@index([productId])
+}
+
+// ─── Orders & Payments ────────────────────────────────────────────────────────
+
+model Order {
+  id              String        @id @default(cuid())
+  userId          String
+  status          OrderStatus   @default(PENDING)
+  subtotal        Decimal       @db.Decimal(10, 2)
+  discountAmount  Decimal       @default(0) @db.Decimal(10, 2)
+  shippingAmount  Decimal       @default(0) @db.Decimal(10, 2)
+  totalAmount     Decimal       @db.Decimal(10, 2)
+  currency        String        @default("PKR")
+  paymentMethod   PaymentMethod
+  paymentStatus   PaymentStatus @default(PENDING)
+  couponId        String?
+  // Snapshot of shipping address at order time (not a live FK)
+  shippingAddress Json
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  user     User         @relation(fields: [userId], references: [id])
+  coupon   Coupon?      @relation(fields: [couponId], references: [id])
+  items    OrderItem[]
+  payments Payment[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([couponId])
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  productId String
+  variantId String
+  // Snapshots at purchase time
+  name      String
+  sku       String
+  unitPrice Decimal @db.Decimal(10, 2)
+  qty       Int
+
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [productId], references: [id])
+  variant ProductVariant @relation(fields: [variantId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+model Payment {
+  id          String        @id @default(cuid())
+  orderId     String
+  provider    PaymentMethod
+  providerRef String? // Stripe PaymentIntent id / wallet txn ref
+  amount      Decimal       @db.Decimal(10, 2)
+  currency    String        @default("PKR")
+  status      PaymentStatus @default(PENDING)
+  rawPayload  Json? // verified webhook payload snapshot (no card data)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([providerRef])
+  @@index([status])
+}
+
+// ─── Coupons & Reviews ────────────────────────────────────────────────────────
+
+model Coupon {
+  id             String     @id @default(cuid())
+  code           String     @unique
+  type           CouponType
+  value          Decimal    @db.Decimal(10, 2) // percent (0–100) or flat amount
+  minOrderValue  Decimal?   @db.Decimal(10, 2)
+  expiresAt      DateTime?
+  usageLimit     Int?
+  usedCount      Int        @default(0)
+  firstOrderOnly Boolean    @default(false)
+  isActive       Boolean    @default(true)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  orders Order[]
+
+  @@index([isActive, expiresAt])
+}
+
+model Review {
+  id                 String   @id @default(cuid())
+  userId             String
+  productId          String
+  rating             Int // 1–5
+  comment            String?  @db.Text
+  photoUrls          String[]
+  isVerifiedPurchase Boolean  @default(false)
+  isApproved         Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@index([productId, isApproved])
+  @@index([rating])
+}

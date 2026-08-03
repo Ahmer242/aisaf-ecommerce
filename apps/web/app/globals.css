@@ -1,0 +1,52 @@
+@import "tailwindcss";
+@import "../styles/tokens.css";
+
+@theme inline {
+  --color-primary: var(--aisaf-primary);
+  --color-primary-dark: var(--aisaf-primary-dark);
+  --color-primary-light: var(--aisaf-primary-light);
+  --color-accent: var(--aisaf-accent);
+  --color-accent-dark: var(--aisaf-accent-dark);
+  --color-bg: var(--aisaf-bg);
+  --color-surface: var(--aisaf-surface);
+  --color-border: var(--aisaf-border);
+  --color-text-primary: var(--aisaf-text-primary);
+  --color-text-secondary: var(--aisaf-text-secondary);
+  --color-text-inverse: var(--aisaf-text-inverse);
+  --color-success: var(--aisaf-success);
+  --color-warning: var(--aisaf-warning);
+  --color-error: var(--aisaf-error);
+  --color-info: var(--aisaf-info);
+  --color-star: var(--aisaf-star);
+
+  --font-heading: var(--font-heading);
+  --font-body: var(--font-body);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-full: var(--radius-full);
+
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.6;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
